@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/kyut0/seedpalette/main/assets/logo-dark.png">
+    <img src="https://raw.githubusercontent.com/kyut0/seedpalette/main/assets/logo-light.png" alt="seedpalette logo: a sprouting seed ringed by rainbow color-wheel rays" width="200">
+  </picture>
+</p>
+
 # seedpalette
 
 Grow a few seed colors into full, readable light and dark website themes, with a report
