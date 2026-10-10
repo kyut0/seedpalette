@@ -8,3 +8,6 @@ dist/
 .ruff_cache/
 seedpalette-preview.html
 .DS_Store
+
+# Exported Omarchy themes (seedpalette export-omarchy)
+omarchy-*-theme/

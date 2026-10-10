@@ -1,10 +1,19 @@
-"""Import Omarchy desktop themes (https://github.com/omacom/omarchy) as web themes.
+"""Convert between Omarchy desktop themes (https://github.com/omacom/omarchy) and
+seedpalette web themes.
 
 An Omarchy theme is one mode, light or dark, described by a `colors.toml`. Its light
 and dark variants are separate themes (e.g. `catppuccin-latte` and `catppuccin`), while
-a seedpalette theme holds both. So the importer takes one or two Omarchy themes: given
-both modes it pairs them, and given one it derives the other by flipping the neutrals'
-lightness and keeping the accents, which seedpalette then makes readable as usual.
+a seedpalette theme holds both.
+
+Import takes one or two Omarchy themes: given both modes it pairs them, and given one it
+derives the other by flipping the neutrals' lightness and keeping the accents, which
+seedpalette then makes readable as usual.
+
+Export writes one mode of a seedpalette theme as a `colors.toml`. Omarchy also needs a
+terminal palette (red, green, yellow, ...), which web themes don't have: each slot
+reuses one of the theme's own colors when its hue is close, and is otherwise made at
+that hue with the lightness and chroma of the theme's accents. Every terminal color is
+then checked for contrast on the background, like web text.
 """
 
 from dataclasses import dataclass
@@ -12,8 +21,20 @@ from pathlib import Path
 import tomllib
 from typing import Any
 
-from seedpalette.color import Oklch, from_oklch, parse_hex, to_oklch
-from seedpalette.palette import CORE_TOKENS, Mode
+from seedpalette.color import (
+    BLACK,
+    TEXT_MIN,
+    WHITE,
+    Oklch,
+    contrast_ratio,
+    ensure_contrast,
+    from_oklch,
+    mix,
+    parse_hex,
+    to_oklch,
+    with_lightness,
+)
+from seedpalette.palette import CORE_TOKENS, Mode, Theme
 
 # seedpalette token -> Omarchy colors.toml key. Override any with mapping=...
 DEFAULT_MAPPING = {
@@ -153,3 +174,129 @@ def import_themes(
         "dark": modes["dark"],
     }
     return name, spec
+
+
+# ---- export ------------------------------------------------------------------------
+
+# Terminal color slots and their approximate OKLCH hue, in degrees.
+ANSI_HUES = {
+    "red": 27.0,
+    "orange": 55.0,
+    "yellow": 95.0,
+    "green": 145.0,
+    "cyan": 200.0,
+    "blue": 260.0,
+    "magenta": 330.0,
+}
+_HUE_TOLERANCE = 25.0  # how far a theme color's hue may be from a slot's to fill it
+_VIVID_CHROMA = 0.08  # below this a color reads as gray, not as a hue
+_NEUTRAL_TOKENS = {"bg", "surface", "border", "text", "muted", "on-accent"}
+_BRIGHT = ("red", "yellow", "green", "cyan", "blue", "magenta")
+
+
+@dataclass(frozen=True)
+class Exported:
+    mode: Mode
+    colors: dict[str, str]  # Omarchy key -> #rrggbb, in colors.toml order
+    notes: list[str]
+
+
+def _hue_distance(a: float, b: float) -> float:
+    d = abs(a - b) % 360
+    return min(d, 360 - d)
+
+
+def export(theme: Theme, mode: Mode) -> Exported:
+    """One mode of a resolved seedpalette theme as Omarchy colors."""
+    p = theme.palette(mode)
+    dark = mode == "dark"
+    bg, notes = p["bg"], []
+
+    vivid = [
+        (token, color)
+        for token, color in p.items()
+        if token not in _NEUTRAL_TOKENS and to_oklch(color).c >= _VIVID_CHROMA
+    ]
+    if vivid:
+        levels = [to_oklch(c) for _, c in vivid]
+        target_l = sum(o.l for o in levels) / len(levels)
+        target_c = sum(o.c for o in levels) / len(levels)
+    else:
+        target_l, target_c = (0.74, 0.13) if dark else (0.52, 0.14)
+
+    ansi: dict[str, str] = {}
+    used: set[str] = set()
+    for slot, hue in ANSI_HUES.items():
+        matches = sorted(
+            (
+                (_hue_distance(to_oklch(color).h, hue), token, color)
+                for token, color in vivid
+                if color not in used
+            ),
+        )
+        close = [m for m in matches if m[0] <= _HUE_TOLERANCE]
+        if close:
+            _, token, color = close[0]
+            used.add(color)
+            source = f"from --{token}"
+        else:
+            color = from_oklch(Oklch(target_l, target_c, hue))
+            source = "made at this hue"
+        fixed = ensure_contrast(color, [bg], TEXT_MIN, darker=not dark)
+        if fixed != color:
+            verb = "lightened" if dark else "darkened"
+            source += f", {verb} from {color} for contrast"
+        ansi[slot] = fixed
+        notes.append(f"{slot:8} {fixed}  {source}")
+
+    def brighter(color: str) -> str:
+        # A step lighter (dark mode) or darker (light mode), capped so already-extreme
+        # colors like pure cyan keep their hue instead of washing out to white or black.
+        lightness = to_oklch(color).l
+        target = (
+            min(lightness + 0.08, max(lightness, 0.88))
+            if dark
+            else max(lightness - 0.06, min(lightness, 0.35))
+        )
+        return ensure_contrast(with_lightness(color, target), [bg], TEXT_MIN, darker=not dark)
+
+    bright = {f"bright_{slot}": brighter(ansi[slot]) for slot in _BRIGHT}
+
+    colors = {
+        "accent": p["accent"],
+        "selection": p["border"],
+        "muted": p["muted"],
+        "background": bg,
+        "dark_background": mix(bg, BLACK, 0.25 if dark else 0.04),
+        "darker_background": mix(bg, BLACK, 0.5 if dark else 0.08),
+        "lighter_background": p["surface"],
+        "foreground": p["text"],
+        "dark_foreground": p["muted"],
+        "light_foreground": p["text"],
+        "bright_foreground": mix(p["text"], WHITE if dark else BLACK, 0.3),
+        **ansi,
+        **bright,
+    }
+    if contrast_ratio(colors["foreground"], bg) < TEXT_MIN:  # pragma: no cover
+        notes.append("warning: foreground fails contrast on background")
+    return Exported(mode=mode, colors=colors, notes=notes)
+
+
+def to_toml(exported: Exported, header: str = "") -> str:
+    """Render exported colors as an Omarchy colors.toml."""
+    lines = [f"# {line}" if line else "#" for line in header.splitlines()]
+    if lines:
+        lines.append("")
+    lines.append(f'mode = "{exported.mode}"')
+    lines.append("")
+    groups = (
+        ("accent", "selection", "muted"),
+        ("background", "dark_background", "darker_background", "lighter_background"),
+        ("foreground", "dark_foreground", "light_foreground", "bright_foreground"),
+        tuple(ANSI_HUES),
+        tuple(f"bright_{slot}" for slot in _BRIGHT),
+    )
+    for group in groups:
+        lines.extend(f'{key} = "{exported.colors[key]}"' for key in group)
+        lines.append("")
+    return "\n".join(lines)

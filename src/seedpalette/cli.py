@@ -1,5 +1,5 @@
-"""Command line: `seedpalette check | css | json | preview THEMES.yaml`, and
-`seedpalette import-omarchy` to turn Omarchy desktop themes into a theme file."""
+"""Command line: `seedpalette check | css | json | preview THEMES.yaml`, plus
+`import-omarchy` and `export-omarchy` to convert to and from Omarchy desktop themes."""
 
 import argparse
 from pathlib import Path
@@ -8,7 +8,7 @@ import sys
 from pydantic import ValidationError
 import yaml
 
-from seedpalette.omarchy import CREDIT, OmarchyError, import_themes, read
+from seedpalette.omarchy import CREDIT, OmarchyError, export, import_themes, read, to_toml
 from seedpalette.palette import ThemeSet, load, parse
 from seedpalette.render import preview_html, report, to_css, to_json
 
@@ -56,7 +56,42 @@ def _parser() -> argparse.ArgumentParser:
         help="use an Omarchy color for a token, e.g. heading=yellow (repeatable)",
     )  # fmt: skip
     omarchy.add_argument("-o", "--out", type=Path, help="output file (default: stdout)")
+
+    exporter = sub.add_parser(
+        "export-omarchy",
+        help="write one mode of a theme as an Omarchy theme (colors.toml)",
+        description="Omarchy themes are one mode each, so export the dark and light modes "
+        "separately. Terminal colors are taken from the theme's own colors where the hue "
+        "fits, and made to match otherwise.",
+    )
+    exporter.add_argument("themes", type=Path)
+    exporter.add_argument("--theme", help="theme name in the file (default: the first)")
+    exporter.add_argument("--mode", choices=["dark", "light"], default="dark")
+    exporter.add_argument(
+        "-o", "--out", type=Path,
+        help="theme directory to write colors.toml into "
+        "(default: omarchy-NAME-theme, or omarchy-NAME-light-theme)",
+    )  # fmt: skip
     return parser
+
+
+def _export_omarchy(args: argparse.Namespace, theme_set: ThemeSet) -> int:
+    names = [t.name for t in theme_set.themes]
+    name = args.theme or names[0]
+    if name not in names:
+        print(f"seedpalette: no theme {name!r}; choose from {names}", file=sys.stderr)
+        return 1
+    theme = theme_set.themes[names.index(name)]
+    exported = export(theme, args.mode)
+    suffix = "-light" if args.mode == "light" else ""
+    out_dir = args.out or Path(f"omarchy-{name}{suffix}-theme")
+    header = (
+        f"{theme.label} ({args.mode}), exported by seedpalette from {args.themes.name}.\n"
+        "Terminal colors are matched to the theme's own colors where the hue fits."
+    )
+    _emit(to_toml(exported, header), out_dir / "colors.toml")
+    print("\n".join(exported.notes), file=sys.stderr)
+    return 0
 
 
 def _import_omarchy(args: argparse.Namespace) -> int:
@@ -107,6 +142,11 @@ def main(argv: list[str] | None = None) -> int:
     if theme_set is None:
         return 1
 
+    if args.command == "export-omarchy":
+        if not theme_set.ok:
+            print(report(theme_set), file=sys.stderr)
+            return 1
+        return _export_omarchy(args, theme_set)
     if args.command == "check":
         print(report(theme_set))
     elif args.command == "css":

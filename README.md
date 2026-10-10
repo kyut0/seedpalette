@@ -159,6 +159,33 @@ Colors map as `background` → `bg`, `lighter_background` → `surface`, `select
 `--map heading=yellow`. Omarchy's themes are MIT-licensed; the generated file credits
 them in its header.
 
+## Export to Omarchy
+
+Going the other way, `export-omarchy` writes one mode of a theme as an Omarchy theme, so
+your website's colors can be your desktop's too. Omarchy themes are one mode each, so
+export dark and light separately:
+
+```bash
+seedpalette export-omarchy themes.yaml --theme sage                # omarchy-sage-theme/
+seedpalette export-omarchy themes.yaml --theme sage --mode light   # omarchy-sage-light-theme/
+```
+
+A desktop theme also needs a terminal palette (red, green, yellow, ...), which web
+themes don't have. Each slot reuses one of the theme's own colors when its hue is
+close, and is otherwise made at that hue with the lightness and saturation of the
+theme's accents. Every terminal color is checked for contrast on the background, and the
+output says where each came from:
+
+```console
+red      #ff7367  made at this hue
+orange   #ff8800  from --accent-2
+cyan     #00f7ff  from --link
+magenta  #e525b8  from --accent, lightened from #d80aad for contrast
+```
+
+To share it, push the folder to its own repo named `omarchy-NAME-theme`; anyone can
+then install it with `omarchy theme install <git-url>`.
+
 ## How adjustments work
 
 Colors are adjusted in [OKLCH](https://bottosson.github.io/posts/oklab/), a perceptual

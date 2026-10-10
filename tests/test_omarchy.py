@@ -4,9 +4,18 @@ import pytest
 import yaml
 
 from seedpalette.cli import main
-from seedpalette.color import to_oklch
-from seedpalette.omarchy import OmarchyError, flip, import_themes, read, seeds
-from seedpalette.palette import parse
+from seedpalette.color import TEXT_MIN, contrast_ratio, to_oklch
+from seedpalette.omarchy import (
+    ANSI_HUES,
+    OmarchyError,
+    export,
+    flip,
+    import_themes,
+    read,
+    seeds,
+    to_toml,
+)
+from seedpalette.palette import Mode, Theme, load, parse
 
 # Small made-up themes in Omarchy's colors.toml format (not copies of real ones).
 DARK = """\
@@ -136,3 +145,63 @@ def test_cli_rejects_bad_map(tmp_path: Path, capsys: pytest.CaptureFixture[str])
     night = _theme(tmp_path, "night", DARK)
     assert main(["import-omarchy", str(night), "--map", "heading"]) == 1
     assert "TOKEN=KEY" in capsys.readouterr().err
+
+
+# ---- export ------------------------------------------------------------------------
+
+EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "themes.yaml"
+
+
+def _sage() -> Theme:
+    return next(t for t in load(EXAMPLE).themes if t.name == "sage")
+
+
+@pytest.mark.parametrize("mode", ["dark", "light"])
+def test_export_terminal_colors_are_readable(mode: Mode) -> None:
+    exported = export(_sage(), mode)
+    bg = exported.colors["background"]
+    for slot in [*ANSI_HUES, *(f"bright_{s}" for s in ("red", "green", "blue"))]:
+        assert contrast_ratio(exported.colors[slot], bg) >= TEXT_MIN, slot
+
+
+def test_export_reuses_theme_colors_that_fit_a_hue() -> None:
+    exported = export(_sage(), "dark")
+    sage = _sage().dark
+    assert exported.colors["cyan"] == sage["link"]  # #00f7ff
+    assert exported.colors["orange"] == sage["accent-2"]
+    assert any("made at this hue" in n for n in exported.notes)
+
+
+def test_made_colors_land_near_their_hue() -> None:
+    exported = export(_sage(), "dark")
+    for slot, hue in ANSI_HUES.items():
+        h = to_oklch(exported.colors[slot]).h
+        assert min(abs(h - hue) % 360, 360 - abs(h - hue) % 360) <= 30, slot
+
+
+def test_export_round_trips_through_import(tmp_path: Path) -> None:
+    exported = export(_sage(), "dark")
+    theme_dir = tmp_path / "omarchy-sage-theme"
+    theme_dir.mkdir()
+    (theme_dir / "colors.toml").write_text(to_toml(exported, "header"))
+    back = read(theme_dir)
+    assert back.name == "sage"
+    assert back.mode == "dark"
+    assert back.colors["background"] == _sage().dark["bg"]
+    assert back.colors["foreground"] == _sage().dark["text"]
+
+
+def test_cli_exports_both_modes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    dark, light = tmp_path / "dark", tmp_path / "light"
+    args = ["export-omarchy", str(EXAMPLE), "--theme", "sage"]
+    assert main([*args, "-o", str(dark)]) == 0
+    assert main([*args, "--mode", "light", "-o", str(light)]) == 0
+    assert read(dark).mode == "dark"
+    assert read(light).mode == "light"
+    assert (dark / "colors.toml").read_text().startswith("# Sage (dark), exported by seedpalette")
+    assert "made at this hue" in capsys.readouterr().err
+
+
+def test_cli_rejects_unknown_theme(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["export-omarchy", str(EXAMPLE), "--theme", "nope"]) == 1
+    assert "choose from" in capsys.readouterr().err
