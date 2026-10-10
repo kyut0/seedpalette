@@ -117,3 +117,10 @@ def test_extra_token_default_must_be_hex_or_core() -> None:
 def test_empty_file_is_rejected() -> None:
     with pytest.raises(ValidationError, match="no themes"):
         parse({"themes": {}})
+
+
+def test_on_accent_falls_back_to_black_for_mid_tone_accents() -> None:
+    light = {"bg": "#e1e2e7", "text": "#3760bf", **SEEDS, "accent": "#2e7de9"}
+    theme = parse(_file(light, {"bg": "#001c07", **SEEDS})).themes[0]
+    assert theme.light["on-accent"] == "#000000"
+    assert theme.ok

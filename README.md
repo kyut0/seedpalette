@@ -127,6 +127,38 @@ print(seedpalette.report(themes))
 Path("themes.css").write_text(seedpalette.to_css(themes))
 ```
 
+## Import Omarchy themes
+
+[Omarchy](https://github.com/omacom/omarchy) themes are desktop color schemes, one mode
+each, in a `colors.toml` (built-ins live in `/usr/share/omarchy/themes`, your own in
+`~/.config/omarchy/themes`). `import-omarchy` turns them into web themes: give it a light
+and a dark theme to pair them, or one theme to derive its other mode.
+
+```bash
+# pair Catppuccin (dark) with Catppuccin Latte (light)
+seedpalette import-omarchy /usr/share/omarchy/themes/catppuccin \
+  /usr/share/omarchy/themes/catppuccin-latte -o catppuccin.yaml
+
+# one theme: the light mode is derived
+seedpalette import-omarchy /usr/share/omarchy/themes/everforest -o everforest.yaml
+```
+
+Terminal palettes are tuned for big, bright text, so their dim colors often fail on a
+web page. The report shows what was fixed:
+
+```console
+everforest (default): Everforest [ok]
+  light adjusted --heading: given #d699b6 reads at 2.12:1; darkened to #975f7a (4.56:1)
+  light adjusted --link: given #7fbbb3 reads at 2.00:1; darkened to #3f7a73 (4.55:1)
+  dark  adjusted --muted: given #4f585e reads at 1.49:1; lightened to #9fa9b0 (4.52:1)
+```
+
+Colors map as `background` → `bg`, `lighter_background` → `surface`, `selection` →
+`border`, `foreground` → `text`, `dark_foreground` → `muted`, `magenta` → `heading`,
+`accent` → `link` and `accent`, `yellow` → `accent-2`. Change any with
+`--map heading=yellow`. Omarchy's themes are MIT-licensed; the generated file credits
+them in its header.
+
 ## How adjustments work
 
 Colors are adjusted in [OKLCH](https://bottosson.github.io/posts/oklab/), a perceptual

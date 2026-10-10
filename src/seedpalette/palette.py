@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, StringConstraints,
 import yaml
 
 from seedpalette.color import (
+    BLACK,
     TEXT_MIN,
     WHITE,
     Oklch,
@@ -215,11 +216,14 @@ def _derive(
     if "on-accent" in spec:
         palette["on-accent"] = spec["on-accent"]
     else:
-        # Button text: whichever of white or the darkest page color reads better.
+        # Button text: whichever of white or the darkest page color reads better. A
+        # mid-tone accent can defeat both (e.g. colored body text on a mid-blue button),
+        # so black is the fallback.
         darkest = palette["bg"] if dark else palette["text"]
-        palette["on-accent"] = max(
-            (WHITE, darkest), key=lambda c: contrast_ratio(c, palette["accent"])
-        )
+        candidates = [WHITE, darkest]
+        if max(contrast_ratio(c, palette["accent"]) for c in candidates) < TEXT_MIN:
+            candidates.append(BLACK)
+        palette["on-accent"] = max(candidates, key=lambda c: contrast_ratio(c, palette["accent"]))
 
     for token, limit in CHROMA_MAX.items():
         value = chroma(palette[token])
