@@ -1,4 +1,9 @@
+from email.message import Message
+import json
 from pathlib import Path
+from typing import Any
+import urllib.error
+import urllib.request
 
 import pytest
 import yaml
@@ -8,9 +13,14 @@ from seedpalette.color import TEXT_MIN, contrast_ratio, to_oklch
 from seedpalette.omarchy import (
     ANSI_HUES,
     OmarchyError,
+    OmarchyTheme,
     export,
+    fetch_builtin,
     flip,
+    http_get,
     import_themes,
+    list_builtins,
+    pair_up,
     read,
     seeds,
     to_toml,
@@ -205,3 +215,140 @@ def test_cli_exports_both_modes(tmp_path: Path, capsys: pytest.CaptureFixture[st
 def test_cli_rejects_unknown_theme(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["export-omarchy", str(EXAMPLE), "--theme", "nope"]) == 1
     assert "choose from" in capsys.readouterr().err
+
+
+# ---- built-ins from GitHub (network replaced by a fake) -----------------------------
+
+RAW = "https://raw.githubusercontent.com/omacom/omarchy/HEAD/themes"
+LISTING = "https://api.github.com/repos/omacom/omarchy/contents/themes"
+
+
+@pytest.fixture
+def fake_github(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """Serve made-up built-in themes; any other URL is a 404."""
+    site = {
+        f"{RAW}/night/colors.toml": DARK,
+        f"{RAW}/night-day/colors.toml": LIGHT,
+        f"{RAW}/legacy/colors.toml": DARK.replace('mode = "dark"\n', ""),
+        f"{RAW}/legacy/light.mode": "",
+        f"{RAW}/solo/colors.toml": DARK,
+        LISTING: json.dumps(
+            [{"name": n, "type": "dir"} for n in ("night", "night-day", "solo")]
+            + [{"name": "README.md", "type": "file"}]
+        ),
+    }
+    monkeypatch.setattr("seedpalette.omarchy.http_get", site.get)
+    return site
+
+
+def test_fetch_builtin_by_name(fake_github: dict[str, str]) -> None:
+    theme = fetch_builtin("night")
+    assert (theme.name, theme.mode) == ("night", "dark")
+    assert theme.colors["background"] == "#1a1b26"
+
+
+def test_fetch_builtin_honors_light_mode_file(fake_github: dict[str, str]) -> None:
+    assert fetch_builtin("legacy").mode == "light"
+
+
+def test_fetch_unknown_builtin_points_to_list(fake_github: dict[str, str]) -> None:
+    with pytest.raises(OmarchyError, match="--list"):
+        fetch_builtin("nope")
+
+
+@pytest.mark.parametrize("name", ["../etc", "a b", "Caps", ""])
+def test_fetch_rejects_unsafe_names(name: str) -> None:
+    with pytest.raises(OmarchyError, match="not an Omarchy theme name"):
+        fetch_builtin(name, fetch=lambda url: pytest.fail("should not fetch"))
+
+
+def test_list_builtins_keeps_only_directories(fake_github: dict[str, str]) -> None:
+    assert list_builtins() == ["night", "night-day", "solo"]
+
+
+def test_pair_up_matches_light_variants_by_name() -> None:
+    def t(name: str, mode: Mode) -> OmarchyTheme:
+        return OmarchyTheme(name=name, mode=mode, colors={})
+
+    groups = pair_up(
+        [t("cat", "dark"), t("cat-latte", "light"), t("rose", "light"), t("solo", "dark")]
+    )
+    assert [[x.name for x in g] for g in groups] == [["cat", "cat-latte"], ["rose"], ["solo"]]
+
+
+def test_cli_imports_a_builtin_by_name(
+    fake_github: dict[str, str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / "t.yaml"
+    assert main(["import-omarchy", "night", "night-day", "-o", str(out)]) == 0
+    spec = yaml.safe_load(out.read_text())["themes"]["night"]
+    assert "night-day (light)" in spec["description"]
+
+
+def test_cli_local_paths_win_over_names(
+    fake_github: dict[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _theme(tmp_path, "night", LIGHT)  # a local "night" that is light, unlike the built-in
+    monkeypatch.chdir(tmp_path)
+    out = tmp_path / "t.yaml"
+    assert main(["import-omarchy", "night", "-o", str(out)]) == 0
+    assert "night (light)" in yaml.safe_load(out.read_text())["themes"]["night"]["description"]
+
+
+def test_cli_all_pairs_and_imports_everything(fake_github: dict[str, str], tmp_path: Path) -> None:
+    out = tmp_path / "all.yaml"
+    assert main(["import-omarchy", "--all", "-o", str(out)]) == 0
+    themes = yaml.safe_load(out.read_text())["themes"]
+    assert list(themes) == ["night", "solo"]  # night + night-day paired
+    assert main(["check", str(out)]) == 0
+
+
+def test_cli_list(fake_github: dict[str, str], capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["import-omarchy", "--list"]) == 0
+    assert capsys.readouterr().out.split() == ["night", "night-day", "solo"]
+
+
+def test_cli_all_conflicts_with_names(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["import-omarchy", "--all", "night"]) == 1
+    assert main(["import-omarchy"]) == 1
+    assert "--list" in capsys.readouterr().err
+
+
+class _Response:
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    def read(self) -> bytes:
+        return self.body
+
+    def __enter__(self) -> "_Response":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+def _raise(exc: Exception) -> Any:
+    def opener(*args: object, **kwargs: object) -> _Response:
+        raise exc
+
+    return opener
+
+
+def test_http_get_success_404_and_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    url = "https://example.test/x"
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _Response(b"hi"))
+    assert http_get(url) == "hi"
+
+    not_found = urllib.error.HTTPError(url, 404, "Not Found", Message(), None)
+    monkeypatch.setattr(urllib.request, "urlopen", _raise(not_found))
+    assert http_get(url) is None
+
+    server_error = urllib.error.HTTPError(url, 503, "Unavailable", Message(), None)
+    monkeypatch.setattr(urllib.request, "urlopen", _raise(server_error))
+    with pytest.raises(OmarchyError, match="HTTP 503"):
+        http_get(url)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _raise(urllib.error.URLError("no route")))
+    with pytest.raises(OmarchyError, match="are you online"):
+        http_get(url)

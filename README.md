@@ -130,18 +130,25 @@ Path("themes.css").write_text(seedpalette.to_css(themes))
 ## Import Omarchy themes
 
 [Omarchy](https://github.com/omacom/omarchy) themes are desktop color schemes, one mode
-each, in a `colors.toml` (built-ins live in `/usr/share/omarchy/themes`, your own in
-`~/.config/omarchy/themes`). `import-omarchy` turns them into web themes: give it a light
-and a dark theme to pair them, or one theme to derive its other mode.
+each, in a `colors.toml`. `import-omarchy` turns them into web themes: give it a light and
+a dark theme to pair them, or one theme to derive its other mode.
+
+Built-in themes are fetched from Omarchy's GitHub repo by name, so you don't need
+Omarchy installed:
 
 ```bash
-# pair Catppuccin (dark) with Catppuccin Latte (light)
-seedpalette import-omarchy /usr/share/omarchy/themes/catppuccin \
-  /usr/share/omarchy/themes/catppuccin-latte -o catppuccin.yaml
-
-# one theme: the light mode is derived
-seedpalette import-omarchy /usr/share/omarchy/themes/everforest -o everforest.yaml
+seedpalette import-omarchy --list                          # the built-in theme names
+seedpalette import-omarchy catppuccin catppuccin-latte -o catppuccin.yaml   # pair them
+seedpalette import-omarchy everforest -o everforest.yaml   # light mode derived
+seedpalette import-omarchy --all -o omarchy.yaml           # every built-in, as one file
 ```
+
+`--all` pairs light variants with the dark theme whose name they extend
+(`catppuccin-latte` with `catppuccin`) and derives the other mode for the rest. Add
+`--ref <tag-or-commit>` to import from a specific Omarchy release instead of its latest.
+
+A THEME can also be a local theme directory or `colors.toml`, such as one of your own in
+`~/.config/omarchy/themes`; a path that exists on disk wins over a built-in name.
 
 Terminal palettes are tuned for big, bright text, so their dim colors often fail on a
 web page. The report shows what was fixed:

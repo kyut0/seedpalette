@@ -16,10 +16,15 @@ that hue with the lightness and chroma of the theme's accents. Every terminal co
 then checked for contrast on the background, like web text.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
+import json
 from pathlib import Path
+import re
 import tomllib
 from typing import Any
+import urllib.error
+import urllib.request
 
 from seedpalette.color import (
     BLACK,
@@ -74,21 +79,20 @@ class OmarchyTheme:
     colors: dict[str, str]  # Omarchy key -> lowercase #rrggbb
 
 
-def read(path: Path) -> OmarchyTheme:
-    """Read an Omarchy theme from its directory or its colors.toml."""
-    file = path / "colors.toml" if path.is_dir() else path
-    theme_dir = file.parent
+def parse_colors(
+    text: str, name: str, *, light_marker: bool = False, where: str = ""
+) -> OmarchyTheme:
+    """Parse a colors.toml's text. light_marker: the theme has the older light.mode file."""
+    where = where or name
     try:
-        data = tomllib.loads(file.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise OmarchyError(f"{file}: {exc}") from exc
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise OmarchyError(f"{where}: {exc}") from exc
 
     # `mode = "light"`, or the older convention of an empty light.mode file.
-    raw_mode = data.get("mode")
-    if raw_mode is None:
-        raw_mode = "light" if (theme_dir / "light.mode").exists() else "dark"
+    raw_mode = data.get("mode", "light" if light_marker else "dark")
     if raw_mode not in ("light", "dark"):
-        raise OmarchyError(f"{file}: mode must be light or dark, got {raw_mode!r}")
+        raise OmarchyError(f"{where}: mode must be light or dark, got {raw_mode!r}")
     mode: Mode = "light" if raw_mode == "light" else "dark"
 
     colors = {}
@@ -97,10 +101,100 @@ def read(path: Path) -> OmarchyTheme:
             try:
                 parse_hex(value)
             except ValueError as exc:
-                raise OmarchyError(f"{file}: {key}: {exc}") from exc
+                raise OmarchyError(f"{where}: {key}: {exc}") from exc
             colors[key] = value.lower()
-    name = theme_dir.name.removeprefix("omarchy-").removesuffix("-theme")
     return OmarchyTheme(name=name, mode=mode, colors=colors)
+
+
+def read(path: Path) -> OmarchyTheme:
+    """Read an Omarchy theme from its directory or its colors.toml."""
+    file = path / "colors.toml" if path.is_dir() else path
+    try:
+        text = file.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise OmarchyError(f"{file}: {exc}") from exc
+    name = file.parent.name.removeprefix("omarchy-").removesuffix("-theme")
+    marker = (file.parent / "light.mode").exists()
+    return parse_colors(text, name, light_marker=marker, where=str(file))
+
+
+# ---- built-in themes from GitHub ---------------------------------------------------
+
+BUILTIN_REPO = "omacom/omarchy"
+# Omarchy's own rule for theme directory names (see its theme installer).
+_THEME_NAME = re.compile(r"^[a-z0-9_][a-z0-9._+-]*$")
+
+Fetch = Callable[[str], str | None]  # URL -> body, or None if it doesn't exist
+
+
+def http_get(url: str) -> str | None:
+    """GET a URL as text; None on 404. Other failures raise OmarchyError."""
+    request = urllib.request.Request(url, headers={"User-Agent": "seedpalette"})
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            body: bytes = response.read()
+            return body.decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise OmarchyError(f"{url}: HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise OmarchyError(f"{url}: {exc.reason} (are you online?)") from exc
+
+
+def fetch_builtin(name: str, *, ref: str = "HEAD", fetch: Fetch | None = None) -> OmarchyTheme:
+    """Fetch a built-in Omarchy theme by name (e.g. "tokyo-night") from GitHub.
+
+    ref is a branch, tag, or commit of the Omarchy repo; HEAD is its default branch.
+    """
+    if not _THEME_NAME.match(name):
+        raise OmarchyError(f"{name!r} is not an Omarchy theme name")
+    fetch = fetch or http_get
+    base = f"https://raw.githubusercontent.com/{BUILTIN_REPO}/{ref}/themes/{name}"
+    text = fetch(f"{base}/colors.toml")
+    if text is None:
+        raise OmarchyError(
+            f"no built-in Omarchy theme named {name!r}; "
+            "run `seedpalette import-omarchy --list` to see them"
+        )
+    marker = "mode =" not in text and fetch(f"{base}/light.mode") is not None
+    return parse_colors(text, name, light_marker=marker, where=f"{BUILTIN_REPO}:{name}")
+
+
+def list_builtins(*, ref: str = "HEAD", fetch: Fetch | None = None) -> list[str]:
+    """Names of every built-in Omarchy theme, sorted."""
+    query = "" if ref == "HEAD" else f"?ref={ref}"
+    body = (fetch or http_get)(
+        f"https://api.github.com/repos/{BUILTIN_REPO}/contents/themes{query}"
+    )
+    if body is None:
+        raise OmarchyError(f"couldn't list themes in {BUILTIN_REPO} at {ref!r}")
+    entries = json.loads(body)
+    return sorted(e["name"] for e in entries if e.get("type") == "dir")
+
+
+def pair_up(themes: list[OmarchyTheme]) -> list[list[OmarchyTheme]]:
+    """Group themes into light/dark pairs where names show they belong together.
+
+    A light theme pairs with the dark theme whose name it extends: "catppuccin-latte"
+    with "catppuccin". Everything else stands alone (and gets its other mode derived).
+    """
+    dark = {t.name: t for t in themes if t.mode == "dark"}
+    groups: list[list[OmarchyTheme]] = []
+    paired: set[str] = set()
+    for light in (t for t in themes if t.mode == "light"):
+        partner = max(
+            (name for name in dark if light.name.startswith(f"{name}-") and name not in paired),
+            key=len,
+            default=None,
+        )
+        if partner:
+            paired.add(partner)
+            groups.append([dark[partner], light])
+        else:
+            groups.append([light])
+    groups.extend([t] for name, t in dark.items() if name not in paired)
+    return sorted(groups, key=lambda g: g[0].name)
 
 
 def seeds(theme: OmarchyTheme, mapping: dict[str, str] | None = None) -> dict[str, str]:

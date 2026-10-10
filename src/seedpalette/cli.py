@@ -8,7 +8,7 @@ import sys
 from pydantic import ValidationError
 import yaml
 
-from seedpalette.omarchy import CREDIT, OmarchyError, export, import_themes, read, to_toml
+from seedpalette import omarchy as om
 from seedpalette.palette import ThemeSet, load, parse
 from seedpalette.render import preview_html, report, to_css, to_json
 
@@ -44,12 +44,19 @@ def _parser() -> argparse.ArgumentParser:
 
     omarchy = sub.add_parser(
         "import-omarchy",
-        help="turn one Omarchy theme (or a light/dark pair) into a theme file",
-        description="Give one Omarchy theme directory or colors.toml to derive its other "
-        "mode, or a light and a dark one to pair them.",
+        help="turn Omarchy themes into a theme file",
+        description="Each THEME is a local theme directory or colors.toml, or the name of a "
+        "built-in Omarchy theme (fetched from GitHub). Give one to derive its other mode, or "
+        "a light and a dark one to pair them. --all imports every built-in theme, pairing "
+        "light/dark variants by name.",
     )
-    omarchy.add_argument("sources", type=Path, nargs="+", metavar="THEME")
-    omarchy.add_argument("--name", help="theme name (default: the dark theme's directory)")
+    omarchy.add_argument("sources", nargs="*", metavar="THEME")
+    omarchy.add_argument("--all", action="store_true", help="import every built-in theme")
+    omarchy.add_argument("--list", action="store_true", help="list built-in theme names")
+    omarchy.add_argument(
+        "--ref", default="HEAD", help="Omarchy branch, tag, or commit (default: its main branch)"
+    )
+    omarchy.add_argument("--name", help="theme name (default: the dark theme's name)")
     omarchy.add_argument("--label", help="display name (default: from the name)")
     omarchy.add_argument(
         "--map", action="append", default=[], metavar="TOKEN=KEY",
@@ -82,36 +89,60 @@ def _export_omarchy(args: argparse.Namespace, theme_set: ThemeSet) -> int:
         print(f"seedpalette: no theme {name!r}; choose from {names}", file=sys.stderr)
         return 1
     theme = theme_set.themes[names.index(name)]
-    exported = export(theme, args.mode)
+    exported = om.export(theme, args.mode)
     suffix = "-light" if args.mode == "light" else ""
     out_dir = args.out or Path(f"omarchy-{name}{suffix}-theme")
     header = (
         f"{theme.label} ({args.mode}), exported by seedpalette from {args.themes.name}.\n"
         "Terminal colors are matched to the theme's own colors where the hue fits."
     )
-    _emit(to_toml(exported, header), out_dir / "colors.toml")
+    _emit(om.to_toml(exported, header), out_dir / "colors.toml")
     print("\n".join(exported.notes), file=sys.stderr)
     return 0
 
 
+def _source(source: str, ref: str) -> om.OmarchyTheme:
+    """A local theme directory/colors.toml if one exists, else a built-in theme name."""
+    path = Path(source)
+    return om.read(path) if path.exists() else om.fetch_builtin(source, ref=ref)
+
+
 def _import_omarchy(args: argparse.Namespace) -> int:
+    if args.all and (args.sources or args.name or args.label):
+        print(
+            "seedpalette: --all imports every built-in; drop THEME/--name/--label", file=sys.stderr
+        )
+        return 1
+    if not (args.sources or args.all or args.list):
+        print("seedpalette: give a THEME, --all, or --list", file=sys.stderr)
+        return 1
     try:
         mapping = dict(item.split("=", 1) for item in args.map)
     except ValueError:
         print("seedpalette: --map takes TOKEN=KEY, e.g. heading=yellow", file=sys.stderr)
         return 1
     try:
-        sources = [read(path) for path in args.sources]
-        name, spec = import_themes(sources, name=args.name, label=args.label, mapping=mapping)
-        theme_set = parse({"themes": {name: spec}})
-    except (OmarchyError, ValidationError) as exc:
+        if args.list:
+            print("\n".join(om.list_builtins(ref=args.ref)))
+            return 0
+        if args.all:
+            fetched = [om.fetch_builtin(n, ref=args.ref) for n in om.list_builtins(ref=args.ref)]
+            specs = dict(om.import_themes(group, mapping=mapping) for group in om.pair_up(fetched))
+        else:
+            sources = [_source(s, args.ref) for s in args.sources]
+            name, spec = om.import_themes(
+                sources, name=args.name, label=args.label, mapping=mapping
+            )
+            specs = {name: spec}
+        theme_set = parse({"themes": specs})
+    except (om.OmarchyError, ValidationError) as exc:
         print(f"seedpalette: {exc}", file=sys.stderr)
         return 1
     header = (
-        f"# Imported by `seedpalette import-omarchy` from {CREDIT}.\n"
+        f"# Imported by `seedpalette import-omarchy` from {om.CREDIT}.\n"
         "# Run `seedpalette check` on this file to see the readability fixes.\n"
     )
-    body = yaml.safe_dump({"themes": {name: spec}}, sort_keys=False, allow_unicode=True)
+    body = yaml.safe_dump({"themes": specs}, sort_keys=False, allow_unicode=True)
     _emit(header + body, args.out)
     print(report(theme_set), file=sys.stderr)
     return 0 if theme_set.ok else 1
