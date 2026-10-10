@@ -1,0 +1,49 @@
+# Example seedpalette theme file. The first theme is the default.
+#
+# Required per mode: bg, heading, link, accent. Optional: surface, border, text, muted,
+# accent-2, on-accent. Anything left out is derived from the colors given, and any text
+# color too faint to read is darkened (light mode) or lightened (dark mode), keeping its
+# hue. Run `seedpalette check examples/themes.yaml` to see every change.
+
+# Project-specific tokens: a default (a core token's name or a hex color), and whether
+# the token is used as text (so it must pass contrast).
+extra_tokens:
+  card-link: {default: link, text: true}
+
+themes:
+  ember:
+    label: Ember
+    description: Cream and dark rust, with plum or pink headings and a hot magenta accent.
+    light:
+      bg: "#f8f1e3"
+      heading: "#8e1f5c"
+      link: "#1f5fae"
+      accent: "#ff2d95"
+      accent-2: "#e2a400"
+      card-link: "#0b7285"
+    dark:
+      bg: "#24120b"
+      heading: "#ff6ec7"
+      link: "#86b6ff"
+      accent: "#ff2d95"
+      accent-2: "#f0bf3a"
+      card-link: "#4fd8e8"
+
+  sage:
+    label: Sage
+    description: Pale sage and deep forest, with dark red, neon orange, cyan, and magenta.
+    light:
+      bg: "#e3eddc"
+      text: "#001c07"
+      heading: "#700808"
+      link: "#059ea1"  # too light on pale sage: seedpalette deepens it
+      card-link: "#d80aad"
+      accent: "#d80aad"
+      accent-2: "#ff8800"
+    dark:
+      bg: "#001c07"
+      heading: "#ff8800"
+      link: "#00f7ff"
+      card-link: "#059ea1"
+      accent: "#d80aad"
+      accent-2: "#ff8800"

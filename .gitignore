@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+.coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+seedpalette-preview.html
+.DS_Store
