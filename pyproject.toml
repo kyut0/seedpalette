@@ -33,7 +33,10 @@ dev = [
 
 [tool.poetry]
 packages = [{ include = "seedpalette", from = "src" }]
-include = [{ path = "src/seedpalette/templates/*.html", format = ["sdist", "wheel"] }]
+include = [
+    { path = "src/seedpalette/templates/*.html", format = ["sdist", "wheel"] },
+    { path = "src/seedpalette/py.typed", format = ["sdist", "wheel"] },
+]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
